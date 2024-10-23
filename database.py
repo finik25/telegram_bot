@@ -4,29 +4,46 @@ def initialize_database():
     conn = sqlite3.connect('quiz.db', check_same_thread=False)
     cursor = conn.cursor()
 
-    # Очистка таблиц перед заполнением
-    cursor.execute("DELETE FROM questions")
-    cursor.execute("DELETE FROM quizzes")
+    # Проверка на существование таблиц
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='quizzes'")
+    quizzes_table_exists = cursor.fetchone()
 
-    # Создание таблицы quizzes
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS quizzes (
-        id INTEGER PRIMARY KEY,
-        name TEXT UNIQUE
-    )
-    ''')
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='questions'")
+    questions_table_exists = cursor.fetchone()
 
-    # Проверка на существование столбца quiz_id в таблице questions
-    cursor.execute("PRAGMA table_info(questions)")
-    columns = [column[1] for column in cursor.fetchall()]
-    if 'quiz_id' not in columns:
-        cursor.execute("DROP TABLE IF EXISTS questions")
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scores'")
+    scores_table_exists = cursor.fetchone()
+
+    if not quizzes_table_exists:
+        # Создание таблицы quizzes
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quizzes (
+            id INTEGER PRIMARY KEY,
+            name TEXT UNIQUE
+        )
+        ''')
+
+    if not questions_table_exists:
+        # Создание таблицы questions
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS questions (
             id INTEGER PRIMARY KEY,
             quiz_id INTEGER,
             question TEXT UNIQUE,
             answer TEXT,
+            FOREIGN KEY (quiz_id) REFERENCES quizzes (id)
+        )
+        ''')
+
+    if not scores_table_exists:
+        # Создание таблицы scores
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scores (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            username TEXT,
+            quiz_id INTEGER,
+            score REAL,
             FOREIGN KEY (quiz_id) REFERENCES quizzes (id)
         )
         ''')
@@ -44,8 +61,8 @@ def initialize_database():
             ('Самое быстрое животное на суше - это?', 'Гепард')
         ]),
         ('Растения', [
-            ('Какое растение вырастает самым высоким?', 'Американская секвоя'),
-            ('Какое растение сбрасывает иголки на зиму?', 'Пихта'),
+            ('Какое растение вырастает самым высоким?', 'Американская секвойя'),
+            ('Какое растение сбрасывает иголки на зиму?', 'Лиственница'),
             ('Какое растение является хищником?', 'Росянка'),
             ('Какое растение является символом Канады?', 'Клён'),
             ('Какое растение изображалось на гербе королевской Франции?','Лилия')
@@ -66,8 +83,16 @@ def initialize_database():
             question_id = cursor.fetchone()
             if not question_id:
                 cursor.execute("INSERT INTO questions (quiz_id, question, answer) VALUES (?, ?, ?)",
-                            (quiz_id, question, answer))
+                               (quiz_id, question, answer))
     conn.commit()
     conn.close()
 
     return "База данных успешно заполнена данными."
+
+def clear_leaderboard():
+    conn = sqlite3.connect('quiz.db', check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM scores")
+    conn.commit()
+    conn.close()
+    return "Лидерборд успешно очищен."

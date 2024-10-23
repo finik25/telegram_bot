@@ -2,7 +2,7 @@ import telebot
 from telebot import types
 import sqlite3
 from threading import Lock
-from database import initialize_database
+from database import initialize_database, clear_leaderboard
 
 API_TOKEN = '8153449820:AAGrGlihbiwy4jTfOhhvzn1KI1Nrj4JQMGE'
 bot = telebot.TeleBot(API_TOKEN)
@@ -10,7 +10,7 @@ bot = telebot.TeleBot(API_TOKEN)
 # Блокировка для синхронизации доступа к базе данных
 lock = Lock()
 
-# Создание таблиц для викторин и вопросов
+# Создание таблиц для викторин, вопросов и счетов
 conn = sqlite3.connect('quiz.db', check_same_thread=False)
 cursor = conn.cursor()
 
@@ -41,6 +41,48 @@ def start_quiz(message):
     else:
         bot.send_message(chat_id, "Нет доступных викторин.")
 
+# Обработчик команды /leaderboard
+@bot.message_handler(commands=['leaderboard'])
+def show_leaderboard(message):
+    chat_id = message.chat.id
+    with lock:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT username, quiz_id, score,
+                   (SELECT COUNT(*) FROM questions WHERE quiz_id = scores.quiz_id) as total_questions
+            FROM scores
+            ORDER BY score DESC
+        """)
+        leaderboard = cursor.fetchall()
+
+    if leaderboard:
+        user_leaderboard = {}
+        for username, quiz_id, score, total_questions in leaderboard:
+            cursor.execute("SELECT name FROM quizzes WHERE id = ?", (quiz_id,))
+            quiz_name = cursor.fetchone()[0]
+            if username not in user_leaderboard or score > user_leaderboard[username]['score']:
+                user_leaderboard[username] = {
+                    'quiz_name': quiz_name,
+                    'score': int(score),
+                    'total_questions': total_questions
+                }
+
+        response = "Лидерборд:\n"
+        position = 1
+        for username, data in user_leaderboard.items():
+            response += f"{position}. {username} - {data['quiz_name']}: {data['score']}/{data['total_questions']} ({data['score']/data['total_questions']*100:.2f}%)\n"
+            position += 1
+        bot.send_message(chat_id, response)
+    else:
+        bot.send_message(chat_id, "Лидерборд пока пуст.")
+
+# Обработчик команды /clear_leaderboard
+@bot.message_handler(commands=['clear_leaderboard'])
+def clear_leaderboard_command(message):
+    chat_id = message.chat.id
+    clear_leaderboard()
+    bot.send_message(chat_id, "Лидерборд успешно очищен.")
+
 # Обработчик callback-запросов
 @bot.callback_query_handler(func=lambda call: True)
 def handle_quiz_selection(call):
@@ -50,8 +92,6 @@ def handle_quiz_selection(call):
     except ValueError:
         if call.data == "newquiz":
             start_quiz(call.message)
-        else:
-            bot.send_message(chat_id, "Ошибка в данных callback. Пожалуйста, попробуйте снова.")
         return
 
     if action == "quiz":
@@ -80,7 +120,7 @@ def handle_quiz_selection(call):
             send_next_question(chat_id)
 
     # сообщение о том, что выбор принят (необязательно)
-    bot.answer_callback_query(call.id, "Выбор принят!")  # Это важно, чтобы пользователь видел отклик
+    bot.answer_callback_query(call.id, "Выбор принят!")
 
 def send_next_question(chat_id):
     if chat_id in game_state:
@@ -95,6 +135,7 @@ def send_next_question(chat_id):
             score = game_state[chat_id]['score']
             total_questions = len(questions)
             bot.send_message(chat_id, f"Викторина завершена! Ваш счёт {score} из {total_questions}")
+            save_score(chat_id, game_state[chat_id]['quiz_id'], score)
             ask_for_next_action(chat_id, game_state[chat_id]['quiz_id'])
             del game_state[chat_id]  # Очистка состояния игры
 
@@ -109,19 +150,19 @@ def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
     new_quiz_button = types.KeyboardButton("Новая викторина")
     change_mode_button = types.KeyboardButton("Смена режима")
-    exit_button = types.KeyboardButton("Выход")
-    keyboard.add(new_quiz_button, change_mode_button, exit_button)
+    leaderboard_button = types.KeyboardButton("Лидерборд")
+    keyboard.add(new_quiz_button, change_mode_button, leaderboard_button)
     return keyboard
 
-@bot.message_handler(func=lambda message: message.text in ["Новая викторина", "Смена режима", "Выход"])
+@bot.message_handler(func=lambda message: message.text in ["Новая викторина", "Смена режима", "Лидерборд"])
 def handle_next_action(message):
     chat_id = message.chat.id
     if message.text == "Новая викторина":
         start_quiz(message)
     elif message.text == "Смена режима":
         bot.send_message(chat_id, "Функция 'Смена режима' пока недоступна.")
-    elif message.text == "Выход":
-        bot.send_message(chat_id, "Было здорово, приходите еще!")
+    elif message.text == "Лидерборд":
+        show_leaderboard(message)
 
 # Обработчик ответов
 @bot.message_handler(func=lambda message: True)
@@ -137,6 +178,17 @@ def handle_answer(message):
 
         # Отправляем следующий вопрос, если он есть
         send_next_question(chat_id)
+
+def save_score(chat_id, quiz_id, score):
+    username = bot.get_chat(chat_id).username
+    with lock:
+        cursor = conn.cursor()
+        cursor.execute("SELECT score FROM scores WHERE user_id = ? AND quiz_id = ?", (chat_id, quiz_id))
+        existing_score = cursor.fetchone()
+        if existing_score is None or score > existing_score[0]:
+            cursor.execute("INSERT OR REPLACE INTO scores (user_id, username, quiz_id, score) VALUES (?, ?, ?, ?)",
+                           (chat_id, username, quiz_id, score))
+            conn.commit()
 
 # Запуск бота
 if __name__ == "__main__":
