@@ -48,6 +48,9 @@ def initialize_database():
         )
         ''')
 
+    # Удаление всех данных из таблицы questions
+    cursor.execute("DELETE FROM questions")
+
     # Добавление викторин и вопросов в базу данных
     quizzes = [
         ('Столицы стран', [
@@ -88,6 +91,7 @@ def initialize_database():
     conn.close()
 
     return "База данных успешно заполнена данными."
+
 
 def clear_leaderboard():
     conn = sqlite3.connect('quiz.db', check_same_thread=False)

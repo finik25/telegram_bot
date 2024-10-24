@@ -21,7 +21,11 @@ game_state = {}
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     chat_id = message.chat.id
-    bot.reply_to(message, "Привет! Начнем викторину? Напиши /quiz", reply_markup=get_main_keyboard())
+    keyboard = types.InlineKeyboardMarkup()
+    single_button = types.InlineKeyboardButton(text="Одиночная", callback_data="single")
+    pvp_button = types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
+    keyboard.add(single_button, pvp_button)
+    bot.send_message(chat_id, "Привет! Выбери тип викторины:", reply_markup=keyboard)
 
 # Обработчик команды /quiz
 @bot.message_handler(commands=['quiz'])
@@ -87,40 +91,43 @@ def clear_leaderboard_command(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_quiz_selection(call):
     chat_id = call.message.chat.id
-    try:
-        action, quiz_id = call.data.split('_')
-    except ValueError:
-        if call.data == "newquiz":
-            start_quiz(call.message)
-        return
+    if call.data == "single":
+        start_quiz(call.message)
+    elif call.data == "pvp":
+        bot.send_message(chat_id, "Функция PVP-викторины пока недоступна.")
+    else:
+        try:
+            action, quiz_id = call.data.split('_')
+        except ValueError:
+            return
 
-    if action == "quiz":
-        quiz_id = int(quiz_id)
-        print(f"Callback data received: {call.data}")  # Логирование для отладки
-        with lock:
-            cursor = conn.cursor()
-            cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
-            questions = cursor.fetchall()
+        if action == "quiz":
+            quiz_id = int(quiz_id)
+            print(f"Callback data received: {call.data}")  # Логирование для отладки
+            with lock:
+                cursor = conn.cursor()
+                cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
+                questions = cursor.fetchall()
 
-        if questions:
-            game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
-            send_next_question(chat_id)
-        else:
-            bot.send_message(chat_id, "В этой викторине нет вопросов.")
+            if questions:
+                game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
+                send_next_question(chat_id)
+            else:
+                bot.send_message(chat_id, "В этой викторине нет вопросов.")
 
-    elif action == "replay":
-        quiz_id = int(quiz_id)
-        with lock:
-            cursor = conn.cursor()
-            cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
-            questions = cursor.fetchall()
+        elif action == "replay":
+            quiz_id = int(quiz_id)
+            with lock:
+                cursor = conn.cursor()
+                cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
+                questions = cursor.fetchall()
 
-        if questions:
-            game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
-            send_next_question(chat_id)
+            if questions:
+                game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
+                send_next_question(chat_id)
 
-    # сообщение о том, что выбор принят (необязательно)
-    bot.answer_callback_query(call.id, "Выбор принят!")
+        # сообщение о том, что выбор принят (необязательно)
+        bot.answer_callback_query(call.id, "Выбор принят!")
 
 def send_next_question(chat_id):
     if chat_id in game_state:
@@ -160,9 +167,14 @@ def handle_next_action(message):
     if message.text == "Новая викторина":
         start_quiz(message)
     elif message.text == "Смена режима":
-        bot.send_message(chat_id, "Функция 'Смена режима' пока недоступна.")
+        keyboard = types.InlineKeyboardMarkup()
+        single_button = types.InlineKeyboardButton(text="Одиночная", callback_data="single")
+        pvp_button = types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
+        keyboard.add(single_button, pvp_button)
+        bot.send_message(chat_id, "Выбери тип викторины:", reply_markup=keyboard)
     elif message.text == "Лидерборд":
         show_leaderboard(message)
+
 
 # Обработчик ответов
 @bot.message_handler(func=lambda message: True)
