@@ -95,6 +95,8 @@ def handle_quiz_selection(call):
         start_quiz(call.message)
     elif call.data == "pvp":
         bot.send_message(chat_id, "Функция PVP-викторины пока недоступна.")
+    elif call.data == "newquiz":
+        start_quiz(call.message)
     else:
         try:
             action, quiz_id = call.data.split('_')
@@ -128,6 +130,7 @@ def handle_quiz_selection(call):
 
         # сообщение о том, что выбор принят (необязательно)
         bot.answer_callback_query(call.id, "Выбор принят!")
+
 
 def send_next_question(chat_id):
     if chat_id in game_state:
