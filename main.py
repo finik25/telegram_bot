@@ -18,36 +18,66 @@ class QuizBot:
         self.bot.message_handler(commands=['leaderboard'])(self.show_leaderboard)
         self.bot.message_handler(commands=['clear_leaderboard'])(self.clear_leaderboard_command)
         self.bot.callback_query_handler(func=lambda call: True)(self.handle_quiz_selection)
-        self.bot.message_handler(func=lambda message: message.text in ["Новая викторина", "Смена режима", "Лидерборд"])(self.handle_next_action)
+        self.bot.message_handler(func=lambda message: message.text in ["Новая викторина", "Смена режима", "Лидерборд"])(
+            self.handle_next_action)
         self.bot.message_handler(func=lambda message: True)(self.handle_answer)
 
     async def send_welcome(self, message):
         chat_id = message.chat.id
         keyboard = types.InlineKeyboardMarkup()
-        single_button = types.InlineKeyboardButton(text="Одиночная", callback_data="single")
-        pvp_button = types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
-        keyboard.add(single_button, pvp_button)
+        keyboard.add(
+            types.InlineKeyboardButton(text="Одиночная", callback_data="single"),
+            types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
+        )
         await self.bot.send_message(chat_id, "Привет! Выбери тип викторины:", reply_markup=keyboard)
 
     async def start_quiz(self, message):
         chat_id = message.chat.id
-        async with self.lock:
-            async with aiosqlite.connect('quiz.db') as db:
-                cursor = await db.cursor()
-                await cursor.execute("SELECT id, name FROM quizzes")
-                quizzes = await cursor.fetchall()
+        quizzes = await self.get_quizzes()
 
         if quizzes:
             keyboard = types.InlineKeyboardMarkup()
             for quiz_id, quiz_name in quizzes:
-                button = types.InlineKeyboardButton(text=quiz_name, callback_data=f"quiz_{quiz_id}")
-                keyboard.add(button)
+                keyboard.add(types.InlineKeyboardButton(text=quiz_name, callback_data=f"quiz_{quiz_id}"))
             await self.bot.send_message(chat_id, "Выбери викторину:", reply_markup=keyboard)
         else:
             await self.bot.send_message(chat_id, "Нет доступных викторин.")
 
+    async def get_quizzes(self):
+        async with self.lock:
+            async with aiosqlite.connect('quiz.db') as db:
+                cursor = await db.cursor()
+                await cursor.execute("SELECT id, name FROM quizzes")
+                return await cursor.fetchall()
+
     async def show_leaderboard(self, message):
         chat_id = message.chat.id
+        leaderboard = await self.fetch_leaderboard()
+
+        if leaderboard:
+            best_scores = {}
+            for username, quiz_id, score, total_questions in leaderboard:
+                if username not in best_scores or (
+                        score / total_questions > best_scores[username]['score'] / best_scores[username]['total_questions']):
+                    quiz_name = await self.fetch_quiz_name(quiz_id)
+                    best_scores[username] = {
+                        'quiz_name': quiz_name,
+                        'score': int(score),  # Convert score to integer
+                        'total_questions': total_questions
+                    }
+
+            response = "Лидерборд:\n"
+            for position, (username, data) in enumerate(
+                    sorted(best_scores.items(), key=lambda x: x[1]['score'] / x[1]['total_questions'], reverse=True),
+                    start=1):
+                response += (f"{position}. {username} - {data['quiz_name']}: "
+                             f"{data['score']}/{data['total_questions']} "
+                             f"({data['score'] / data['total_questions'] * 100:.2f}%)\n")
+            await self.bot.send_message(chat_id, response)
+        else:
+            await self.bot.send_message(chat_id, "Лидерборд пока пуст.")
+
+    async def fetch_leaderboard(self):
         async with self.lock:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -57,32 +87,14 @@ class QuizBot:
                     FROM scores
                     ORDER BY score DESC
                 """)
-                leaderboard = await cursor.fetchall()
+                return await cursor.fetchall()
 
-        if leaderboard:
-            user_leaderboard = {}
-            for username, quiz_id, score, total_questions in leaderboard:
-                async with aiosqlite.connect('quiz.db') as db:
-                    cursor = await db.cursor()
-                    await cursor.execute("SELECT name FROM quizzes WHERE id = ?", (quiz_id,))
-                    quiz_name = (await cursor.fetchone())[0]
-                if username not in user_leaderboard or score > user_leaderboard[username]['score']:
-                    user_leaderboard[username] = {
-                        'quiz_name': quiz_name,
-                        'score': int(score),
-                        'total_questions': total_questions
-                    }
-
-            response = "Лидерборд:\n"
-            position = 1
-            for username, data in user_leaderboard.items():
-                response += (f"{position}. {username} - {data['quiz_name']}: "
-                             f"{data['score']}/{data['total_questions']} "
-                             f"({data['score']/data['total_questions']*100:.2f}%)\n")
-                position += 1
-            await self.bot.send_message(chat_id, response)
-        else:
-            await self.bot.send_message(chat_id, "Лидерборд пока пуст.")
+    async def fetch_quiz_name(self, quiz_id):
+        async with self.lock:
+            async with aiosqlite.connect('quiz.db') as db:
+                cursor = await db.cursor()
+                await cursor.execute("SELECT name FROM quizzes WHERE id = ?", (quiz_id,))
+                return (await cursor.fetchone())[0]
 
     async def clear_leaderboard_command(self, message):
         chat_id = message.chat.id
@@ -109,11 +121,7 @@ class QuizBot:
                 await self.replay_quiz(chat_id, int(quiz_id))
 
     async def start_quiz_game(self, chat_id, quiz_id):
-        async with self.lock:
-            async with aiosqlite.connect('quiz.db') as db:
-                cursor = await db.cursor()
-                await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
-                questions = await cursor.fetchall()
+        questions = await self.fetch_questions(quiz_id)
 
         if questions:
             self.game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
@@ -121,16 +129,16 @@ class QuizBot:
         else:
             await self.bot.send_message(chat_id, "В этой викторине нет вопросов.")
 
-    async def replay_quiz(self, chat_id, quiz_id):
+    async def fetch_questions(self, quiz_id):
         async with self.lock:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
-                await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
-                questions = await cursor.fetchall()
+                await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()",
+                                     (quiz_id,))
+                return await cursor.fetchall()
 
-        if questions:
-            self.game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
-            await self.send_next_question(chat_id)
+    async def replay_quiz(self, chat_id, quiz_id):
+        await self.start_quiz_game(chat_id, quiz_id)
 
     async def send_next_question(self, chat_id):
         if chat_id in self.game_state:
@@ -140,28 +148,33 @@ class QuizBot:
                 question, answer = questions[current_question]
                 self.game_state[chat_id]['current_question'] += 1
                 self.game_state[chat_id]['answer'] = answer
-                await self.bot.send_message(chat_id, question, reply_markup=self.get_main_keyboard())
+                await self.bot.send_message(chat_id, question)
             else:
-                score = self.game_state[chat_id]['score']
-                total_questions = len(questions)
-                await self.bot.send_message(chat_id, f"Викторина завершена! Ваш счёт {score} из {total_questions}")
-                await self.save_score(chat_id, self.game_state[chat_id]['quiz_id'], score)
-                await self.ask_for_next_action(chat_id, self.game_state[chat_id]['quiz_id'])
-                del self.game_state[chat_id]  # Очистка состояния игры
+                await self.finish_quiz(chat_id)
+
+    async def finish_quiz(self, chat_id):
+        score = self.game_state[chat_id]['score']
+        total_questions = len(self.game_state[chat_id]['questions'])
+        await self.save_score(chat_id, self.game_state[chat_id]['quiz_id'], score)
+        await self.ask_for_next_action(chat_id, self.game_state[chat_id]['quiz_id'])
+        del self.game_state[chat_id]  # Очистка состояния игры
+        await self.bot.send_message(chat_id, f"Викторина завершена! Ваш счёт {score} из {total_questions}", reply_markup=self.get_main_keyboard())
 
     async def ask_for_next_action(self, chat_id, quiz_id):
         keyboard = types.InlineKeyboardMarkup()
-        replay_button = types.InlineKeyboardButton(text="Пройти заново", callback_data=f"replay_{quiz_id}")
-        new_quiz_button = types.InlineKeyboardButton(text="Другая викторина", callback_data="newquiz")
-        keyboard.add(replay_button, new_quiz_button)
+        keyboard.add(
+            types.InlineKeyboardButton(text="Пройти заново", callback_data=f"replay_{quiz_id}"),
+            types.InlineKeyboardButton(text="Другая викторина", callback_data="newquiz")
+        )
         await self.bot.send_message(chat_id, "Сыграем ещё?", reply_markup=keyboard)
 
     def get_main_keyboard(self):
         keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        new_quiz_button = types.KeyboardButton("Новая викторина")
-        change_mode_button = types.KeyboardButton("Смена режима")
-        leaderboard_button = types.KeyboardButton("Лидерборд")
-        keyboard.add(new_quiz_button, change_mode_button, leaderboard_button)
+        keyboard.add(
+            types.KeyboardButton("Новая викторина"),
+            types.KeyboardButton("Смена режима"),
+            types.KeyboardButton("Лидерборд")
+        )
         return keyboard
 
     async def handle_next_action(self, message):
@@ -170,9 +183,10 @@ class QuizBot:
             await self.start_quiz(message)
         elif message.text == "Смена режима":
             keyboard = types.InlineKeyboardMarkup()
-            single_button = types.InlineKeyboardButton(text="Одиночная", callback_data="single")
-            pvp_button = types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
-            keyboard.add(single_button, pvp_button)
+            keyboard.add(
+                types.InlineKeyboardButton(text="Одиночная", callback_data="single"),
+                types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
+            )
             await self.bot.send_message(chat_id, "Выбери тип викторины:", reply_markup=keyboard)
         elif message.text == "Лидерборд":
             await self.show_leaderboard(message)
@@ -198,6 +212,8 @@ class QuizBot:
                 cursor = await db.cursor()
                 await cursor.execute("SELECT score FROM scores WHERE user_id = ? AND quiz_id = ?", (chat_id, quiz_id))
                 existing_score = await cursor.fetchone()
+
+                # Сравниваем лучший результат
                 if existing_score is None or score > existing_score[0]:
                     await cursor.execute(
                         "INSERT OR REPLACE INTO scores (user_id, username, quiz_id, score) VALUES (?, ?, ?, ?)",
@@ -210,6 +226,7 @@ class QuizBot:
         print(result)
         await self.bot.polling()
 
-API_TOKEN = '8153449820:AAGrGlihbiwy4jTfOhhvzn1KI1Nrj4JQMGE'
-quiz_bot = QuizBot(API_TOKEN, 'quiz.db')
-asyncio.run(quiz_bot.run())
+if __name__ == "__main__":
+    API_TOKEN = '8153449820:AAGrGlihbiwy4jTfOhhvzn1KI1Nrj4JQMGE'
+    quiz_bot = QuizBot(API_TOKEN, 'quiz.db')
+    asyncio.run(quiz_bot.run())
