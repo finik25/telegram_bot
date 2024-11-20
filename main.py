@@ -10,6 +10,8 @@ class QuizBot:
         self.database = Database(db_name)
         self.lock = asyncio.Lock()
         self.game_state = {}
+        self.pvp_queue = []
+        self.pvp_game_state = {}
         self.bot_handlers()
 
     def bot_handlers(self):
@@ -106,7 +108,25 @@ class QuizBot:
         if call.data == "single":
             await self.start_quiz(call.message)
         elif call.data == "pvp":
-            await self.bot.send_message(chat_id, "Функция PVP-викторины пока недоступна.")
+            if chat_id in self.pvp_queue:
+                await self.bot.send_message(chat_id, "Вы уже в очереди на PVP-викторину.")
+            else:
+                self.pvp_queue.append(chat_id)
+                if len(self.pvp_queue) == 2:
+                    player1, player2 = self.pvp_queue
+                    await self.finish_quiz(player1, silent=True)
+                    await self.finish_quiz(player2, silent=True)
+                    await self.start_pvp_game(player1, player2)
+                else:
+                    keyboard = types.InlineKeyboardMarkup()
+                    keyboard.add(types.InlineKeyboardButton(text="Покинуть очередь", callback_data="leave_queue"))
+                    await self.bot.send_message(chat_id, "Вы добавлены в очередь на PVP-викторину. Пожалуйста, подождите второго игрока.", reply_markup=keyboard)
+        elif call.data == "leave_queue":
+            if chat_id in self.pvp_queue:
+                self.pvp_queue.remove(chat_id)
+                await self.bot.send_message(chat_id, "Вы покинули очередь на PVP-викторину.")
+            else:
+                await self.bot.send_message(chat_id, "Вы не в очереди на PVP-викторину.")
         elif call.data == "newquiz":
             await self.start_quiz(call.message)
         else:
@@ -119,6 +139,54 @@ class QuizBot:
                 await self.start_quiz_game(chat_id, int(quiz_id))
             elif action == "replay":
                 await self.replay_quiz(chat_id, int(quiz_id))
+
+    async def start_pvp_game(self, player1, player2):
+        player1_name = await self.get_username(player1)
+        player2_name = await self.get_username(player2)
+        await self.bot.send_message(player1, f"PVP-викторина начинается. Вы против игрока {player2_name}!")
+        await self.bot.send_message(player2, f"PVP-викторина начинается. Вы против игрока {player1_name}!")
+        await self.bot.send_message(player1, "Викторина начнётся через 10 секунд.")
+        await self.bot.send_message(player2, "Викторина начнётся через 10 секунд.")
+        await asyncio.sleep(10)
+
+        questions = await self.fetch_questions_for_pvp()
+        self.pvp_game_state[player1] = {'questions': questions, 'current_question': 0, 'score': 0, 'answered': False, 'correct_answer': False}
+        self.pvp_game_state[player2] = {'questions': questions, 'current_question': 0, 'score': 0, 'answered': False, 'correct_answer': False}
+        await self.send_next_pvp_question(player1, player2)
+
+    async def fetch_questions_for_pvp(self):
+        async with self.lock:
+            async with aiosqlite.connect('quiz.db') as db:
+                cursor = await db.cursor()
+                await cursor.execute("SELECT question, answer FROM questions ORDER BY RANDOM() LIMIT 10")
+                questions = await cursor.fetchall()
+                if len(questions) < 10:
+                    print("Warning: Less than 10 questions fetched for PVP game")
+                return questions
+
+    async def send_next_pvp_question(self, player1, player2):
+        if player1 in self.pvp_game_state and player2 in self.pvp_game_state:
+            current_question = self.pvp_game_state[player1]['current_question']
+            questions = self.pvp_game_state[player1]['questions']
+
+            # Проверка на выход за пределы списка
+            if current_question < len(questions):
+                question, answer = questions[current_question]
+                self.pvp_game_state[player1]['current_question'] += 1
+                self.pvp_game_state[player2]['current_question'] += 1
+                self.pvp_game_state[player1]['answer'] = answer
+                self.pvp_game_state[player2]['answer'] = answer
+                self.pvp_game_state[player1]['answered'] = False
+                self.pvp_game_state[player2]['answered'] = False
+                self.pvp_game_state[player1]['correct_answer'] = False
+                self.pvp_game_state[player2]['correct_answer'] = False
+                await self.bot.send_message(player1, question)
+                await self.bot.send_message(player2, question)
+            else:
+                await self.finish_pvp_game(player1, player2)
+        else:
+            print(f"Error: Player {player1} or {player2} not in pvp_game_state")
+            self.pvp_queue = []  # Очистка очереди игроков в случае ошибки
 
     async def start_quiz_game(self, chat_id, quiz_id):
         questions = await self.fetch_questions(quiz_id)
@@ -133,8 +201,7 @@ class QuizBot:
         async with self.lock:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
-                await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()",
-                                     (quiz_id,))
+                await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ? ORDER BY RANDOM()", (quiz_id,))
                 return await cursor.fetchall()
 
     async def replay_quiz(self, chat_id, quiz_id):
@@ -152,13 +219,16 @@ class QuizBot:
             else:
                 await self.finish_quiz(chat_id)
 
-    async def finish_quiz(self, chat_id):
-        score = self.game_state[chat_id]['score']
-        total_questions = len(self.game_state[chat_id]['questions'])
-        await self.save_score(chat_id, self.game_state[chat_id]['quiz_id'], score)
-        await self.ask_for_next_action(chat_id, self.game_state[chat_id]['quiz_id'])
-        del self.game_state[chat_id]  # Очистка состояния игры
-        await self.bot.send_message(chat_id, f"Викторина завершена! Ваш счёт {score} из {total_questions}", reply_markup=self.get_main_keyboard())
+    async def finish_quiz(self, chat_id, silent=False):
+        if chat_id in self.game_state:
+            score = self.game_state[chat_id]['score']
+            total_questions = len(self.game_state[chat_id]['questions'])
+            await self.save_score(chat_id, self.game_state[chat_id]['quiz_id'], score)
+            if not silent:
+                await self.ask_for_next_action(chat_id, self.game_state[chat_id]['quiz_id'])
+            del self.game_state[chat_id]  # Очистка состояния игры
+            if not silent:
+                await self.bot.send_message(chat_id, f"Викторина завершена! Ваш счёт {score} из {total_questions}", reply_markup=self.get_main_keyboard())
 
     async def ask_for_next_action(self, chat_id, quiz_id):
         keyboard = types.InlineKeyboardMarkup()
@@ -203,6 +273,57 @@ class QuizBot:
 
             # Отправляем следующий вопрос, если он есть
             await self.send_next_question(chat_id)
+        elif chat_id in self.pvp_game_state:
+            opponent = self.get_opponent(chat_id)
+            if opponent:
+                correct_answer = self.pvp_game_state[chat_id]['answer']
+                if message.text.lower() == correct_answer.lower():
+                    if not self.pvp_game_state[opponent]['correct_answer']:
+                        self.pvp_game_state[chat_id]['score'] += 1
+                        self.pvp_game_state[chat_id]['correct_answer'] = True
+                        player_name = await self.get_username(chat_id)
+                        await self.bot.send_message(chat_id, "Верно!")
+                        await self.bot.send_message(opponent, f"Игрок {player_name} ответил правильно!")
+                        await self.send_next_pvp_question(chat_id, opponent)
+                    else:
+                        await self.bot.send_message(chat_id, "Ответ уже был дан другим игроком.")
+                else:
+                    self.pvp_game_state[chat_id]['answered'] = True
+                    await self.bot.send_message(chat_id, "Не верно.")
+                    if self.pvp_game_state[opponent]['answered']:
+                        await self.send_next_pvp_question(chat_id, opponent)
+
+    def get_opponent(self, player_id):
+        for player, state in self.pvp_game_state.items():
+            if player != player_id:
+                return player
+        return None
+
+    async def finish_pvp_game(self, player1, player2):
+        player1_name = await self.get_username(player1)
+        player2_name = await self.get_username(player2)
+        score1 = self.pvp_game_state[player1]['score']
+        score2 = self.pvp_game_state[player2]['score']
+        if score1 > score2:
+            winner = player1_name
+        elif score2 > score1:
+            winner = player2_name
+        else:
+            winner = None
+
+        if winner:
+            await self.bot.send_message(player1,
+                                        f"Викторина завершена! Победитель - {winner} ({score1} против {score2})")
+            await self.bot.send_message(player2,
+                                        f"Викторина завершена! Победитель - {winner} ({score2} против {score1})")
+        else:
+            await self.bot.send_message(player1, f"Викторина завершена! Ничья ({score1} против {score2})")
+            await self.bot.send_message(player2, f"Викторина завершена! Ничья ({score2} против {score1})")
+
+        # Сброс состояния игры
+        del self.pvp_game_state[player1]
+        del self.pvp_game_state[player2]
+        self.pvp_queue = []  # Очистка очереди игроков
 
     async def save_score(self, chat_id, quiz_id, score):
         chat = await self.bot.get_chat(chat_id)
@@ -221,11 +342,16 @@ class QuizBot:
                     await db.commit()
                     print(f"Score saved: {username} - {quiz_id} - {score}")
 
+    async def get_username(self, chat_id):
+        chat = await self.bot.get_chat(chat_id)
+        return chat.username or "None"
+
     async def run(self):
         result = await self.database.initialize_database()
         print(result)
         await self.bot.polling()
 
+# Запуск бота
 if __name__ == "__main__":
     API_TOKEN = '8153449820:AAGrGlihbiwy4jTfOhhvzn1KI1Nrj4JQMGE'
     quiz_bot = QuizBot(API_TOKEN, 'quiz.db')
