@@ -1,5 +1,7 @@
 import asyncio
 import aiosqlite
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 class PVPQuizManager:
     def __init__(self, bot):
@@ -11,7 +13,6 @@ class PVPQuizManager:
         player1_name = await self.get_username(player1)
         player2_name = await self.get_username(player2)
 
-        # Отправка сообщений о начале викторины и правилах
         await self.bot.send_message(player1, f"PVP-викторина начинается. Вы против игрока {player2_name}!")
         await self.bot.send_message(player2, f"PVP-викторина начинается. Вы против игрока {player1_name}!")
 
@@ -25,22 +26,21 @@ class PVPQuizManager:
         self.pvp_game_state[player2] = {'questions': questions, 'current_question': 0, 'score': 0, 'answered': False, 'correct_answer': False}
         await self.send_next_pvp_question(player1, player2)
 
-    async def fetch_questions_for_pvp(self):
-        async with aiosqlite.connect('quiz.db') as db:
-            cursor = await db.cursor()
-            await cursor.execute("SELECT question, answer FROM questions ORDER BY RANDOM() LIMIT 10")
-            questions = await cursor.fetchall()
-            if len(questions) < 10:
-                print("Warning: Less than 10 questions fetched for PVP game")
-            return questions
-
     async def send_next_pvp_question(self, player1, player2):
         if player1 in self.pvp_game_state and player2 in self.pvp_game_state:
             current_question = self.pvp_game_state[player1]['current_question']
             questions = self.pvp_game_state[player1]['questions']
 
-            # Проверка на выход за пределы списка
             if current_question < len(questions):
+                # Обратный отсчет перед выводом вопроса
+                countdown_message1 = await self.bot.send_message(player1, "Следующий вопрос через 3...")
+                countdown_message2 = await self.bot.send_message(player2, "Следующий вопрос через 3...")
+
+                for i in range(2, -1, -1):
+                    await asyncio.sleep(1)
+                    await self.bot.edit_message_text(chat_id=countdown_message1.chat.id, message_id=countdown_message1.message_id, text=f"Следующий вопрос через {i}...")
+                    await self.bot.edit_message_text(chat_id=countdown_message2.chat.id, message_id=countdown_message2.message_id, text=f"Следующий вопрос через {i}...")
+
                 question, answer = questions[current_question]
                 self.pvp_game_state[player1]['current_question'] += 1
                 self.pvp_game_state[player2]['current_question'] += 1
@@ -57,6 +57,14 @@ class PVPQuizManager:
         else:
             print(f"Error: Player {player1} or {player2} not in pvp_game_state")
             self.pvp_queue = []  # Очистка очереди игроков в случае ошибки
+
+    async def fetch_questions_for_pvp(self):
+        async with aiosqlite.connect('quiz.db') as db:
+            cursor = await db.execute("SELECT question, answer FROM questions ORDER BY RANDOM() LIMIT 10")
+            questions = await cursor.fetchall()
+            if len(questions) < 10:
+                print("Warning: Less than 10 questions fetched for PVP game")
+            return questions
 
     async def finish_pvp_game(self, player1, player2):
         player1_name = await self.get_username(player1)
