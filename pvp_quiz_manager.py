@@ -1,7 +1,5 @@
 import asyncio
 import aiosqlite
-from telebot.async_telebot import AsyncTeleBot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 class PVPQuizManager:
     def __init__(self, bot):
@@ -33,13 +31,14 @@ class PVPQuizManager:
 
             if current_question < len(questions):
                 # Обратный отсчет перед выводом вопроса
-                countdown_message1 = await self.bot.send_message(player1, "Следующий вопрос через 3...")
-                countdown_message2 = await self.bot.send_message(player2, "Следующий вопрос через 3...")
+                countdown_message1 = await self.bot.send_message(player1, "Следующий вопрос через 3 секунды...")
+                countdown_message2 = await self.bot.send_message(player2, "Следующий вопрос через 3 секунды...")
 
                 for i in range(2, -1, -1):
                     await asyncio.sleep(1)
-                    await self.bot.edit_message_text(chat_id=countdown_message1.chat.id, message_id=countdown_message1.message_id, text=f"Следующий вопрос через {i}...")
-                    await self.bot.edit_message_text(chat_id=countdown_message2.chat.id, message_id=countdown_message2.message_id, text=f"Следующий вопрос через {i}...")
+                    await self.bot.edit_message_text(chat_id=countdown_message1.chat.id, message_id=countdown_message1.message_id, text=f"Следующий вопрос через {i} секунд...")
+                    await self.bot.edit_message_text(chat_id=countdown_message2.chat.id, message_id=countdown_message2.message_id, text=f"Следующий вопрос через {i} секунд...")
+
 
                 question, answer = questions[current_question]
                 self.pvp_game_state[player1]['current_question'] += 1
@@ -60,7 +59,8 @@ class PVPQuizManager:
 
     async def fetch_questions_for_pvp(self):
         async with aiosqlite.connect('quiz.db') as db:
-            cursor = await db.execute("SELECT question, answer FROM questions ORDER BY RANDOM() LIMIT 10")
+            cursor = await db.cursor()
+            await cursor.execute("SELECT question, answer FROM questions ORDER BY RANDOM() LIMIT 10")
             questions = await cursor.fetchall()
             if len(questions) < 10:
                 print("Warning: Less than 10 questions fetched for PVP game")

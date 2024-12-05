@@ -12,7 +12,7 @@ class QuizBot:
         self.database = Database(db_name)
 
         # Инициализация всех компонентов
-        self.command_handler = CommandHandler(self.bot)
+        self.command_handler = CommandHandler(self.bot, self.database)
         self.game_state_manager = GameStateManager(self.bot)
         self.pvp_quiz_manager = PVPQuizManager(self.bot)
 
@@ -23,7 +23,8 @@ class QuizBot:
             self.pvp_quiz_manager.pvp_game_state,
             self.game_state_manager.game_state,
             self.game_state_manager,
-            self.pvp_quiz_manager
+            self.pvp_quiz_manager,
+            self.database
         )
 
         self.setup_handlers()

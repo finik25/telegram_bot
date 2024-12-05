@@ -7,13 +7,21 @@ class GameStateManager:
         self.game_state = {}
 
     async def start_quiz_game(self, chat_id, quiz_id):
-        questions = await self.fetch_questions(quiz_id)
-
-        if questions:
-            self.game_state[chat_id] = {'questions': questions, 'current_question': 0, 'score': 0, 'quiz_id': quiz_id}
-            await self.send_next_question(chat_id)
-        else:
-            await self.bot.send_message(chat_id, "В этой викторине нет вопросов.")
+        async with aiosqlite.connect('quiz.db') as db:
+            cursor = await db.cursor()
+            await cursor.execute("SELECT question, answer FROM questions WHERE quiz_id = ?", (quiz_id,))
+            questions = await cursor.fetchall()
+            if questions:
+                self.game_state[chat_id] = {
+                    'questions': questions,
+                    'current_question': 0,
+                    'score': 0,
+                    'answer': None,
+                    'quiz_id': quiz_id
+                }
+                await self.send_next_question(chat_id)
+            else:
+                await self.bot.send_message(chat_id, "Викторина не найдена.")
 
     async def fetch_questions(self, quiz_id):
         async with aiosqlite.connect('quiz.db') as db:

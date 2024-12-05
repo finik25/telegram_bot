@@ -2,23 +2,61 @@ import aiosqlite
 from telebot import types
 
 class MessageHandler:
-    def __init__(self, bot, pvp_queue, pvp_game_state, game_state, game_state_manager, pvp_quiz_manager):
+    def __init__(self, bot, pvp_queue, pvp_game_state, game_state, game_state_manager, pvp_quiz_manager, database):
         self.bot = bot
         self.pvp_queue = pvp_queue
         self.pvp_game_state = pvp_game_state
         self.game_state = game_state
         self.game_state_manager = game_state_manager
         self.pvp_quiz_manager = pvp_quiz_manager
+        self.database = database
+        self.current_action = None
+        self.current_quiz = {}
+        self.current_step = None
 
     def setup_handlers(self):
-        self.bot.callback_query_handler(func=lambda call: True)(self.handle_quiz_selection)
-        self.bot.message_handler(func=lambda message: message.text in ["Новая викторина", "Смена режима", "Лидерборд"])(
-            self.handle_next_action)
-        self.bot.message_handler(func=lambda message: True)(self.handle_answer)
+        self.bot.callback_query_handler(func=lambda call: True)(self.handle_callback)
+        self.bot.message_handler(func=lambda message: True)(self.handle_message)
 
-    async def handle_quiz_selection(self, call):
+    async def handle_callback(self, call):
         chat_id = call.message.chat.id
-        if call.data == "single":
+        if call.data == "add_quiz":
+            self.current_action = "add_quiz"
+            self.current_step = "name"
+            await self.bot.send_message(chat_id, "Введите название викторины:")
+        elif call.data == "update_quiz":
+            self.current_action = "update_quiz"
+            self.current_step = "select_quiz"
+            quizzes = await self.database.get_quizzes()
+            keyboard = types.InlineKeyboardMarkup()
+            for quiz_id, quiz_name in quizzes:
+                keyboard.add(types.InlineKeyboardButton(text=quiz_name, callback_data=f"select_quiz_{quiz_id}"))
+            await self.bot.send_message(chat_id, "Выберите викторину для обновления:", reply_markup=keyboard)
+        elif call.data == "delete_quiz":
+            self.current_action = "delete_quiz"
+            quizzes = await self.database.get_quizzes()
+            keyboard = types.InlineKeyboardMarkup()
+            for quiz_id, quiz_name in quizzes:
+                keyboard.add(types.InlineKeyboardButton(text=quiz_name, callback_data=f"delete_quiz_{quiz_id}"))
+            await self.bot.send_message(chat_id, "Выберите викторину для удаления:", reply_markup=keyboard)
+        elif call.data.startswith("select_quiz_"):
+            quiz_id = int(call.data.split('_')[2])
+            quiz_name, questions = await self.database.get_quiz_details(quiz_id)
+            self.current_quiz = {'name': quiz_name, 'questions': questions}
+            self.current_step = "update_question"
+            await self.bot.send_message(chat_id, f"Викторина: {quiz_name}\nВопросы и ответы:")
+            for question, answer in questions:
+                await self.bot.send_message(chat_id, f"Вопрос: {question}\nОтвет: {answer}")
+            await self.bot.send_message(chat_id, "Введите новый вопрос или нажмите 'Готово':", reply_markup=self.get_done_keyboard())
+        elif call.data.startswith("delete_quiz_"):
+            quiz_id = int(call.data.split('_')[2])
+            result = await self.database.delete_quiz_by_id(quiz_id)
+            await self.bot.send_message(chat_id, result)
+            self.current_action = None
+            self.current_quiz = {}
+        elif call.data == "done":
+            await self.handle_done(call)
+        elif call.data == "single":
             await self.start_quiz(call.message)
         elif call.data == "pvp":
             if chat_id in self.pvp_queue:
@@ -40,21 +78,46 @@ class MessageHandler:
                 await self.bot.send_message(chat_id, "Вы покинули очередь на PVP-викторину.")
             else:
                 await self.bot.send_message(chat_id, "Вы не в очереди на PVP-викторину.")
+        elif call.data.startswith("quiz_"):
+            quiz_id = int(call.data.split('_')[1])
+            await self.game_state_manager.start_quiz_game(chat_id, quiz_id)
+        elif call.data.startswith("replay_"):
+            quiz_id = int(call.data.split('_')[1])
+            await self.replay_quiz(chat_id, quiz_id)
         elif call.data == "newquiz":
             await self.start_quiz(call.message)
-        else:
-            try:
-                action, quiz_id = call.data.split('_')
-            except ValueError:
-                return
 
-            if action == "quiz":
-                await self.game_state_manager.start_quiz_game(chat_id, int(quiz_id))
-            elif action == "replay":
-                await self.replay_quiz(chat_id, int(quiz_id))
-
-    async def handle_next_action(self, message):
+    async def handle_message(self, message):
         chat_id = message.chat.id
+        text = message.text
+
+        if self.current_action == "add_quiz":
+            if self.current_step == "name":
+                self.current_quiz['name'] = text
+                self.current_quiz['questions'] = []
+                self.current_step = "question"
+                await self.bot.send_message(chat_id, "Введите вопрос:")
+            elif self.current_step == "question":
+                self.current_quiz['questions'].append((text, ''))
+                self.current_step = "answer"
+                await self.bot.send_message(chat_id, "Введите ответ:")
+            elif self.current_step == "answer":
+                if self.current_quiz['questions']:
+                    self.current_quiz['questions'][-1] = (self.current_quiz['questions'][-1][0], text)
+                await self.bot.send_message(chat_id, "Введите следующий вопрос или нажмите 'Готово':", reply_markup=self.get_done_keyboard())
+                self.current_step = "question"  # Возвращаемся к шагу вопроса
+
+        elif self.current_action == "update_quiz":
+            if self.current_step == "update_question":
+                self.current_quiz['questions'].append((text, ''))
+                self.current_step = "update_answer"
+                await self.bot.send_message(chat_id, "Введите ответ:")
+            elif self.current_step == "update_answer":
+                if self.current_quiz['questions']:
+                    self.current_quiz['questions'][-1] = (self.current_quiz['questions'][-1][0], text)
+                await self.bot.send_message(chat_id, "Введите следующий вопрос или нажмите 'Готово':", reply_markup=self.get_done_keyboard())
+                self.current_step = "update_question"  # Возвращаемся к шагу вопроса
+
         if message.text == "Новая викторина":
             await self.start_quiz(message)
         elif message.text == "Смена режима":
@@ -63,13 +126,10 @@ class MessageHandler:
                 types.InlineKeyboardButton(text="Одиночная", callback_data="single"),
                 types.InlineKeyboardButton(text="PVP-викторина", callback_data="pvp")
             )
-            await self.bot.send_message(chat_id, "Выбери тип викторины:", reply_markup=keyboard)
+            await self.bot.send_message(chat_id, "Выберите тип викторины:", reply_markup=keyboard)
         elif message.text == "Лидерборд":
             await self.show_leaderboard(message)
-
-    async def handle_answer(self, message):
-        chat_id = message.chat.id
-        if chat_id in self.game_state:
+        elif chat_id in self.game_state:
             correct_answer = self.game_state[chat_id]['answer']
             if message.text.lower() == correct_answer.lower():
                 await self.bot.send_message(chat_id, "Правильно!")
@@ -113,7 +173,7 @@ class MessageHandler:
             keyboard = types.InlineKeyboardMarkup()
             for quiz_id, quiz_name in quizzes:
                 keyboard.add(types.InlineKeyboardButton(text=quiz_name, callback_data=f"quiz_{quiz_id}"))
-            await self.bot.send_message(chat_id, "Выбери викторину:", reply_markup=keyboard)
+            await self.bot.send_message(chat_id, "Выберите викторину:", reply_markup=keyboard)
         else:
             await self.bot.send_message(chat_id, "Нет доступных викторин.")
 
@@ -159,13 +219,15 @@ class MessageHandler:
                 FROM scores
                 ORDER BY score DESC
             """)
-            return await cursor.fetchall()
+            results = await cursor.fetchall()
+            return [result for result in results if result[3] > 0]  # Фильтруем результаты, где total_questions > 0
 
     async def fetch_quiz_name(self, quiz_id):
         async with aiosqlite.connect('quiz.db') as db:
             cursor = await db.cursor()
             await cursor.execute("SELECT name FROM quizzes WHERE id = ?", (quiz_id,))
-            return (await cursor.fetchone())[0]
+            result = await cursor.fetchone()
+            return result[0] if result else None
 
     async def replay_quiz(self, chat_id, quiz_id):
         await self.game_state_manager.start_quiz_game(chat_id, quiz_id)
@@ -189,10 +251,26 @@ class MessageHandler:
             if current_question < len(questions):
                 question, answer = questions[current_question]
                 self.pvp_game_state[player1]['current_question'] += 1
-                self.pvp_game_state[player1]['answer'] = answer
                 self.pvp_game_state[player2]['current_question'] += 1
+                self.pvp_game_state[player1]['answer'] = answer
                 self.pvp_game_state[player2]['answer'] = answer
                 await self.bot.send_message(player1, question)
                 await self.bot.send_message(player2, question)
             else:
                 await self.pvp_quiz_manager.finish_pvp_game(player1, player2)
+
+    def get_done_keyboard(self):
+        keyboard = types.InlineKeyboardMarkup()
+        keyboard.add(types.InlineKeyboardButton(text="Готово", callback_data="done"))
+        return keyboard
+
+    async def handle_done(self, call):
+        chat_id = call.message.chat.id
+        if self.current_action == "add_quiz":
+            await self.database.add_quiz(self.current_quiz['name'], self.current_quiz['questions'])
+            await self.bot.send_message(chat_id, f"Викторина '{self.current_quiz['name']}' успешно добавлена.")
+        elif self.current_action == "update_quiz":
+            await self.database.update_quiz(self.current_quiz['name'], self.current_quiz['name'], self.current_quiz['questions'])
+            await self.bot.send_message(chat_id, f"Викторина '{self.current_quiz['name']}' успешно обновлена.")
+        self.current_action = None
+        self.current_quiz = {}
