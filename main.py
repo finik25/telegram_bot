@@ -1,4 +1,6 @@
+import os
 import asyncio
+import logging
 from telebot.async_telebot import AsyncTeleBot
 from command_handler import CommandHandler
 from message_handler import MessageHandler
@@ -6,9 +8,16 @@ from game_state_manager import GameStateManager
 from pvp_quiz_manager import PVPQuizManager
 from database import Database
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 class QuizBot:
-    def __init__(self, api_token, db_name):
-        self.bot = AsyncTeleBot(api_token)
+    def __init__(self, db_name):
+        self.api_token = os.getenv('API_TOKEN')
+        if not self.api_token:
+            raise ValueError("API_TOKEN environment variable is not set")
+        self.bot = AsyncTeleBot(self.api_token)
         self.database = Database(db_name)
 
         # Инициализация всех компонентов
@@ -34,12 +43,17 @@ class QuizBot:
         self.message_handler.setup_handlers()
 
     async def run(self):
-        result = await self.database.initialize_database()
-        print(result)
-        await self.bot.polling()
+        try:
+            result = await self.database.initialize_database()
+            logger.info(result)
+            await self.bot.polling()
+        except Exception as e:
+            logger.error(f"Error during bot initialization: {e}")
 
 # Запуск бота
 if __name__ == "__main__":
-    API_TOKEN = '8153449820:AAGrGlihbiwy4jTfOhhvzn1KI1Nrj4JQMGE'
-    quiz_bot = QuizBot(API_TOKEN, 'quiz.db')
-    asyncio.run(quiz_bot.run())
+    try:
+        quiz_bot = QuizBot('quiz.db')
+        asyncio.run(quiz_bot.run())
+    except Exception as e:
+        logger.error(f"Error during bot start: {e}")
