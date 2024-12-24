@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 class QuizBot:
     def __init__(self, db_name):
+        """
+        Инициализация бота.
+        :param db_name: Имя базы данных.
+        """
         self.api_token = os.getenv('API_TOKEN')
         if not self.api_token:
             raise ValueError("API_TOKEN environment variable is not set")
@@ -39,10 +43,16 @@ class QuizBot:
         self.setup_handlers()
 
     def setup_handlers(self):
+        """
+        Установка обработчиков команд и сообщений.
+        """
         self.command_handler.setup_handlers()
         self.message_handler.setup_handlers()
 
     async def run(self):
+        """
+        Запуск бота.
+        """
         try:
             result = await self.database.initialize_database()
             logger.info(result)

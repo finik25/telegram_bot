@@ -8,10 +8,19 @@ logger = logging.getLogger(__name__)
 
 class GameStateManager:
     def __init__(self, bot):
+        """
+        Инициализация менеджера состояния одиночных викторин.
+        :param bot: Экземпляр бота.
+        """
         self.bot = bot
         self.game_state = {}
 
     async def start_quiz_game(self, chat_id, quiz_id):
+        """
+        Запуск одиночной викторины.
+        :param chat_id: ID чата.
+        :param quiz_id: ID викторины.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -32,6 +41,11 @@ class GameStateManager:
             logger.error(f"Error starting quiz game: {e}")
 
     async def fetch_questions(self, quiz_id):
+        """
+        Получение вопросов викторины.
+        :param quiz_id: ID викторины.
+        :return: Список вопросов.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -42,12 +56,21 @@ class GameStateManager:
             return []
 
     async def replay_quiz(self, chat_id, quiz_id):
+        """
+        Переигровка викторины.
+        :param chat_id: ID чата.
+        :param quiz_id: ID викторины.
+        """
         try:
             await self.start_quiz_game(chat_id, quiz_id)
         except Exception as e:
             logger.error(f"Error replaying quiz: {e}")
 
     async def send_next_question(self, chat_id):
+        """
+        Отправка следующего вопроса.
+        :param chat_id: ID чата.
+        """
         try:
             if chat_id in self.game_state:
                 current_question = self.game_state[chat_id]['current_question']
@@ -63,6 +86,13 @@ class GameStateManager:
             logger.error(f"Error sending next question: {e}")
 
     async def finish_quiz(self, chat_id, silent=False):
+        """
+        Завершение викторины.
+        :param chat_id: ID чата.
+        :param silent: Флаг 'тихого режима'. Если True, сообщение о завершении викторины не будет отправлено,
+        викторина завершается автоматически при переходе в другой режим/вызове редактора викторин.
+
+        """
         try:
             if chat_id in self.game_state:
                 score = self.game_state[chat_id]['score']
@@ -76,6 +106,11 @@ class GameStateManager:
             logger.error(f"Error finishing quiz: {e}")
 
     async def ask_for_next_action(self, chat_id, quiz_id):
+        """
+        Запрос следующего действия после завершения викторины.
+        :param chat_id: ID чата.
+        :param quiz_id: ID викторины.
+        """
         try:
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(
@@ -87,6 +122,10 @@ class GameStateManager:
             logger.error(f"Error asking for next action: {e}")
 
     def get_main_keyboard(self):
+        """
+        Получение основной клавиатуры.
+        :return: Основная клавиатура.
+        """
         keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
         keyboard.add(
             types.KeyboardButton("Новая викторина"),
@@ -96,6 +135,12 @@ class GameStateManager:
         return keyboard
 
     async def save_score(self, chat_id, quiz_id, score):
+        """
+        Сохранение результата викторины.
+        :param chat_id: ID чата.
+        :param quiz_id: ID викторины.
+        :param score: Результат викторины.
+        """
         try:
             chat = await self.bot.get_chat(chat_id)
             username = chat.username

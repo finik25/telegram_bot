@@ -8,11 +8,21 @@ logger = logging.getLogger(__name__)
 
 class PVPQuizManager:
     def __init__(self, bot):
+        """
+        Инициализация менеджера PVP-викторин.
+        :param bot: Экземпляр бота.
+        """
         self.bot = bot
         self.pvp_game_state = {}
         self.pvp_queue = []
+        self.lock = asyncio.Lock()  # Добавляем блокировку
 
     async def start_pvp_game(self, player1, player2):
+        """
+        Запуск PVP-викторины.
+        :param player1: ID первого игрока.
+        :param player2: ID второго игрока.
+        """
         try:
             player1_name = await self.get_username(player1)
             player2_name = await self.get_username(player2)
@@ -33,41 +43,51 @@ class PVPQuizManager:
             logger.error(f"Error starting PVP game: {e}")
 
     async def send_next_pvp_question(self, player1, player2):
+        """
+        Отправка следующего вопроса для PVP-викторины.
+        :param player1: ID первого игрока.
+        :param player2: ID второго игрока.
+        """
         try:
-            if player1 in self.pvp_game_state and player2 in self.pvp_game_state:
-                current_question = self.pvp_game_state[player1]['current_question']
-                questions = self.pvp_game_state[player1]['questions']
+            async with self.lock:  # Используем блокировку для синхронизации
+                if player1 in self.pvp_game_state and player2 in self.pvp_game_state:
+                    current_question = self.pvp_game_state[player1]['current_question']
+                    questions = self.pvp_game_state[player1]['questions']
 
-                if current_question < len(questions):
-                    # Обратный отсчет перед выводом вопроса
-                    countdown_message1 = await self.bot.send_message(player1, "Следующий вопрос через 3 секунды...")
-                    countdown_message2 = await self.bot.send_message(player2, "Следующий вопрос через 3 секунды...")
+                    if current_question < len(questions):
+                        # Обратный отсчет перед выводом вопроса
+                        countdown_message1 = await self.bot.send_message(player1, "Следующий вопрос через 3 секунды...")
+                        countdown_message2 = await self.bot.send_message(player2, "Следующий вопрос через 3 секунды...")
 
-                    for i in range(2, -1, -1):
-                        await asyncio.sleep(1)
-                        await self.bot.edit_message_text(chat_id=countdown_message1.chat.id, message_id=countdown_message1.message_id, text=f"Следующий вопрос через {i} секунд...")
-                        await self.bot.edit_message_text(chat_id=countdown_message2.chat.id, message_id=countdown_message2.message_id, text=f"Следующий вопрос через {i} секунд...")
+                        for i in range(2, -1, -1):
+                            await asyncio.sleep(1)
+                            await self.bot.edit_message_text(chat_id=countdown_message1.chat.id, message_id=countdown_message1.message_id, text=f"Следующий вопрос через {i} секунд...")
+                            await self.bot.edit_message_text(chat_id=countdown_message2.chat.id, message_id=countdown_message2.message_id, text=f"Следующий вопрос через {i} секунд...")
 
-                    question, answer = questions[current_question]
-                    self.pvp_game_state[player1]['current_question'] += 1
-                    self.pvp_game_state[player2]['current_question'] += 1
-                    self.pvp_game_state[player1]['answer'] = answer
-                    self.pvp_game_state[player2]['answer'] = answer
-                    self.pvp_game_state[player1]['answered'] = False
-                    self.pvp_game_state[player2]['answered'] = False
-                    self.pvp_game_state[player1]['correct_answer'] = False
-                    self.pvp_game_state[player2]['correct_answer'] = False
-                    await self.bot.send_message(player1, question)
-                    await self.bot.send_message(player2, question)
+                        question, answer = questions[current_question]
+                        self.pvp_game_state[player1]['current_question'] += 1
+                        self.pvp_game_state[player2]['current_question'] += 1
+                        self.pvp_game_state[player1]['answer'] = answer
+                        self.pvp_game_state[player2]['answer'] = answer
+                        self.pvp_game_state[player1]['answered'] = False
+                        self.pvp_game_state[player2]['answered'] = False
+                        self.pvp_game_state[player1]['correct_answer'] = False
+                        self.pvp_game_state[player2]['correct_answer'] = False
+                        await self.bot.send_message(player1, question)
+                        await self.bot.send_message(player2, question)
+                    else:
+                        await self.finish_pvp_game(player1, player2)
                 else:
-                    await self.finish_pvp_game(player1, player2)
-            else:
-                logger.error(f"Error: Player {player1} or {player2} not in pvp_game_state")
-                self.pvp_queue = []  # Очистка очереди игроков в случае ошибки
+                    logger.error(f"Error: Player {player1} or {player2} not in pvp_game_state")
+                    self.pvp_queue = []  # Очистка очереди игроков в случае ошибки
         except Exception as e:
             logger.error(f"Error sending next PVP question: {e}")
 
     async def fetch_questions_for_pvp(self):
+        """
+        Получение вопросов для PVP-викторины.
+        :return: Список вопросов.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -81,6 +101,11 @@ class PVPQuizManager:
             return []
 
     async def finish_pvp_game(self, player1, player2):
+        """
+        Завершение PVP-викторины.
+        :param player1: ID первого игрока.
+        :param player2: ID второго игрока.
+        """
         try:
             player1_name = await self.get_username(player1)
             player2_name = await self.get_username(player2)
@@ -105,6 +130,11 @@ class PVPQuizManager:
             logger.error(f"Error finishing PVP game: {e}")
 
     async def get_username(self, chat_id):
+        """
+        Получение имени пользователя.
+        :param chat_id: ID чата.
+        :return: Имя пользователя.
+        """
         try:
             chat = await self.bot.get_chat(chat_id)
             return chat.username or "None"

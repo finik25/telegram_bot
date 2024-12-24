@@ -7,9 +7,17 @@ logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self, db_name):
+        """
+        Инициализация базы данных.
+        :param db_name: Имя базы данных.
+        """
         self.db_name = db_name
 
     async def initialize_database(self):
+        """
+        Инициализация базы данных. Создает таблицы, если они не существуют, и заполняет их начальными данными.
+        :return: Сообщение об успешной инициализации.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 await db.execute("PRAGMA foreign_keys = ON")
@@ -72,7 +80,7 @@ class Database:
                     ('Животные', [
                         ('Самое крупное животное на суше - это?', 'Слон'),
                         ('Самое медленное животное - это?', 'Ленивец'),
-                        ('Самое крупное морское животное - это?', 'Синий кит'),
+                        ('Самое крупное морское животное - это?', 'Кит'),
                         ('Самое быстрое животное на суше - это?', 'Гепард')
                     ]),
                     ('Растения', [
@@ -108,6 +116,10 @@ class Database:
             return "Ошибка при инициализации базы данных."
 
     async def clear_leaderboard(self):
+        """
+        Очистка лидерборда. Удаляет все записи из таблицы scores.
+        :return: Сообщение об успешной очистке.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 await db.execute("DELETE FROM scores")
@@ -118,6 +130,12 @@ class Database:
             return "Ошибка при очистке лидерборда."
 
     async def add_quiz(self, quiz_name, questions):
+        """
+        Добавление новой викторины.
+        :param quiz_name: Название викторины.
+        :param questions: Список вопросов и ответов.
+        :return: Сообщение об успешном добавлении.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()
@@ -141,6 +159,13 @@ class Database:
             return f"Ошибка при добавлении викторины '{quiz_name}'."
 
     async def update_quiz(self, quiz_name, new_quiz_name, questions):
+        """
+        Обновление существующей викторины.
+        :param quiz_name: Текущее название викторины.
+        :param new_quiz_name: Новое название викторины.
+        :param questions: Список новых вопросов и ответов.
+        :return: Сообщение об успешном обновлении.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()
@@ -168,6 +193,11 @@ class Database:
             return f"Ошибка при обновлении викторины '{quiz_name}'."
 
     async def delete_quiz(self, quiz_name):
+        """
+        Удаление викторины по названию.
+        :param quiz_name: Название викторины.
+        :return: Сообщение об успешном удалении.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()
@@ -192,6 +222,11 @@ class Database:
             return f"Ошибка при удалении викторины '{quiz_name}'."
 
     async def delete_quiz_by_id(self, quiz_id):
+        """
+        Удаление викторины по ID.
+        :param quiz_id: ID викторины.
+        :return: Сообщение об успешном удалении.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()
@@ -200,15 +235,12 @@ class Database:
                     # Получаем название викторины по её ID
                     await cursor.execute("SELECT name FROM quizzes WHERE id = ?", (quiz_id,))
                     quiz_name = await cursor.fetchone()
-                    if quiz_name:
-                        quiz_name = quiz_name[0]
-                        await cursor.execute("DELETE FROM questions WHERE quiz_id = ?", (quiz_id,))
-                        await cursor.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
-                        await db.commit()
-                        return f"Викторина '{quiz_name}' успешно удалена."
-                    else:
-                        await db.rollback()
-                        return f"Викторина с ID {quiz_id} не найдена."
+                    quiz_name = quiz_name[0] if quiz_name else "Unknown Quiz"
+
+                    await cursor.execute("DELETE FROM questions WHERE quiz_id = ?", (quiz_id,))
+                    await cursor.execute("DELETE FROM quizzes WHERE id = ?", (quiz_id,))
+                    await db.commit()
+                    return f"Викторина '{quiz_name}' успешно удалена."
                 except Exception as e:
                     await db.rollback()
                     raise e
@@ -217,6 +249,10 @@ class Database:
             return f"Ошибка при удалении викторины с ID {quiz_id}."
 
     async def get_quizzes(self):
+        """
+        Получение списка всех викторин.
+        :return: Список викторин.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()
@@ -227,6 +263,11 @@ class Database:
             return []
 
     async def get_quiz_details(self, quiz_id):
+        """
+        Получение деталей викторины по её ID.
+        :param quiz_id: ID викторины.
+        :return: Название викторины и список вопросов.
+        """
         try:
             async with aiosqlite.connect(self.db_name) as db:
                 cursor = await db.cursor()

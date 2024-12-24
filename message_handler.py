@@ -8,6 +8,16 @@ logger = logging.getLogger(__name__)
 
 class MessageHandler:
     def __init__(self, bot, pvp_queue, pvp_game_state, game_state, game_state_manager, pvp_quiz_manager, database):
+        """
+        Инициализация обработчика сообщений.
+        :param bot: Экземпляр бота.
+        :param pvp_queue: Очередь для PVP-викторин.
+        :param pvp_game_state: Состояние PVP-викторин.
+        :param game_state: Состояние одиночных викторин.
+        :param game_state_manager: Менеджер состояния одиночных викторин.
+        :param pvp_quiz_manager: Менеджер PVP-викторин.
+        :param database: Экземпляр базы данных.
+        """
         self.bot = bot
         self.pvp_queue = pvp_queue
         self.pvp_game_state = pvp_game_state
@@ -20,12 +30,19 @@ class MessageHandler:
         self.current_step = None
 
     def setup_handlers(self):
+        """
+        Установка обработчиков сообщений.
+        """
         self.bot.callback_query_handler(func=lambda call: True)(self.handle_callback)
         self.bot.message_handler(func=lambda message: True)(self.handle_message)
 
     async def handle_callback(self, call):
+        """
+        Обработчик callback-запросов.
+        :param call: Объект callback-запроса. Содержит информацию о запросе, такую как ID чата, данные запроса и т.д.
+        """
         try:
-            chat_id = call.message.chat.id
+            chat_id = call.message.chat.id  # Используется для отправки сообщений в конкретный чат
             if call.data == "add_quiz":
                 self.current_action = "add_quiz"
                 self.current_step = "name"
@@ -77,7 +94,7 @@ class MessageHandler:
                     else:
                         keyboard = types.InlineKeyboardMarkup()
                         keyboard.add(types.InlineKeyboardButton(text="Покинуть очередь", callback_data="leave_queue"))
-                        await self.bot.send_message(chat_id, "Вы добавлены в очередь на PVP-викторину. Пожалуйста, подождите второго игрока.", reply_markup=keyboard)
+                        await self.bot.send_message(chat_id, "Вы добавлены в очередь на PVP-викторину. Пожалуйста, подождите второго игрока. Вы можете пока продолжить проходить одиночные викторины.", reply_markup=keyboard)
             elif call.data == "leave_queue":
                 if chat_id in self.pvp_queue:
                     self.pvp_queue.remove(chat_id)
@@ -100,9 +117,13 @@ class MessageHandler:
             logger.error(f"Error handling callback: {e}")
 
     async def handle_message(self, message):
+        """
+        Обработчик сообщений.
+        :param message: Объект сообщения. Содержит ID чата (message.chat.id), текст сообщения (message.text)
+        """
         try:
-            chat_id = message.chat.id
-            text = message.text
+            chat_id = message.chat.id  # Используется для отправки сообщений в конкретный чат
+            text = message.text  # Используется для обработки текста сообщения
 
             if self.current_action == "add_quiz":
                 if self.current_step == "name":
@@ -175,14 +196,23 @@ class MessageHandler:
             logger.error(f"Error handling message: {e}")
 
     def get_opponent(self, player_id):
+        """
+        Получение противника для PVP-викторины.
+        :param player_id: ID игрока.
+        :return: ID противника.
+        """
         for player, state in self.pvp_game_state.items():
             if player != player_id:
                 return player
         return None
 
     async def start_quiz(self, message):
+        """
+        Запуск викторины.
+        :param message: Объект сообщения. Содержит ID чата (message.chat.id).
+        """
         try:
-            chat_id = message.chat.id
+            chat_id = message.chat.id  # Используется для отправки сообщений в конкретный чат
             quizzes = await self.get_quizzes()
 
             if quizzes:
@@ -196,6 +226,10 @@ class MessageHandler:
             logger.error(f"Error starting quiz: {e}")
 
     async def get_quizzes(self):
+        """
+        Получение списка викторин.
+        :return: Список викторин.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -206,8 +240,12 @@ class MessageHandler:
             return []
 
     async def show_leaderboard(self, message):
+        """
+        Отображение лидерборда.
+        :param message: Объект сообщения. Содержит ID чата (message.chat.id).
+        """
         try:
-            chat_id = message.chat.id
+            chat_id = message.chat.id  # Используется для отправки сообщений в конкретный чат
             leaderboard = await self.fetch_leaderboard()
 
             if leaderboard:
@@ -236,6 +274,10 @@ class MessageHandler:
             logger.error(f"Error showing leaderboard: {e}")
 
     async def fetch_leaderboard(self):
+        """
+        Получение лидерборда.
+        :return: Лидерборд.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -252,6 +294,11 @@ class MessageHandler:
             return []
 
     async def fetch_quiz_name(self, quiz_id):
+        """
+        Получение названия викторины по её ID.
+        :param quiz_id: ID викторины.
+        :return: Название викторины.
+        """
         try:
             async with aiosqlite.connect('quiz.db') as db:
                 cursor = await db.cursor()
@@ -263,12 +310,21 @@ class MessageHandler:
             return None
 
     async def replay_quiz(self, chat_id, quiz_id):
+        """
+        Переигровка викторины.
+        :param chat_id: ID чата.
+        :param quiz_id: ID викторины.
+        """
         try:
             await self.game_state_manager.start_quiz_game(chat_id, quiz_id)
         except Exception as e:
             logger.error(f"Error replaying quiz: {e}")
 
     async def send_next_question(self, chat_id):
+        """
+        Отправка следующего вопроса.
+        :param chat_id: ID чата.
+        """
         try:
             if chat_id in self.game_state:
                 current_question = self.game_state[chat_id]['current_question']
@@ -284,6 +340,11 @@ class MessageHandler:
             logger.error(f"Error sending next question: {e}")
 
     async def send_next_pvp_question(self, player1, player2):
+        """
+        Отправка следующего вопроса для PVP-викторины.
+        :param player1: ID первого игрока.
+        :param player2: ID второго игрока.
+        """
         try:
             if player1 in self.pvp_game_state and player2 in self.pvp_game_state:
                 current_question = self.pvp_game_state[player1]['current_question']
@@ -302,13 +363,21 @@ class MessageHandler:
             logger.error(f"Error sending next PVP question: {e}")
 
     def get_done_keyboard(self):
+        """
+        Получение клавиатуры с кнопкой "Готово".
+        :return: Клавиатура с кнопкой "Готово".
+        """
         keyboard = types.InlineKeyboardMarkup()
         keyboard.add(types.InlineKeyboardButton(text="Готово", callback_data="done"))
         return keyboard
 
     async def handle_done(self, call):
+        """
+        Обработчик завершения добавления/обновления викторины.
+        :param call: Объект callback-запроса.
+        """
         try:
-            chat_id = call.message.chat.id
+            chat_id = call.message.chat.id  # Используется для отправки сообщений в конкретный чат
             if self.current_action == "add_quiz":
                 await self.database.add_quiz(self.current_quiz['name'], self.current_quiz['questions'])
                 await self.bot.send_message(chat_id, f"Викторина '{self.current_quiz['name']}' успешно добавлена.")
